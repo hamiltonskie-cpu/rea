@@ -1,0 +1,40 @@
+{
+  "name": "market-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch src/server/index.ts",
+    "dev:web": "vite --host 0.0.0.0",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.server.json",
+    "start": "node dist-server/server/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "test": "tsx --test src/server/backtest.test.ts src/server/marketData.test.ts src/shared/indicators.test.ts",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "latest",
+    "@fontsource/ibm-plex-sans": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "express": "latest",
+    "lightweight-charts": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/express": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
