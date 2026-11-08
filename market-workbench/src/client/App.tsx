@@ -1,21 +1,33 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity,
   ArrowDownRight,
   ArrowUpRight,
+  Columns2,
   ChevronDown,
   Clock3,
   FlaskConical,
+  LayoutGrid,
   LineChart,
   Play,
   Search,
   SlidersHorizontal,
+  Square,
   Sparkles,
 } from "lucide-react";
-import MarketChart from "./MarketChart.js";
+import MarketChart from "./MarketChartECharts.js";
+import PaperTradePanel from "./PaperTradePanel.js";
+import VolumeProfilePanel from "./VolumeProfilePanel.js";
+import {
+  digitalRoot,
+  DOUBLING_DIGITAL_ROOT_CYCLE,
+  MULTIPLES_OF_THREE_DIGITAL_ROOT_CYCLE,
+} from "../shared/chartStudies.js";
 import type { IndicatorSnapshot } from "../shared/indicators.js";
 import type { BacktestResult, Candle, Interval, Market } from "../shared/market.js";
-import { intervals } from "../shared/market.js";
+import { intervals, simulatedUpdateIntervalMs } from "../shared/market.js";
+
+const StrategyStudio = lazy(() => import("./StrategyStudio.js"));
 
 const timezoneOptions = [
   "UTC",
@@ -33,6 +45,8 @@ const pages = [
   { id: "chart", label: "Chart" },
   { id: "indicators", label: "Indicators" },
   { id: "strategy", label: "Strategy" },
+  { id: "paper", label: "Paper" },
+  { id: "studio", label: "Studio" },
 ] as const;
 type PageId = (typeof pages)[number]["id"];
 
@@ -43,8 +57,13 @@ function activePageFromHash(): PageId {
 
 export default function App() {
   const [page, setPage] = useState<PageId>(activePageFromHash);
+  const [hasOpenedStudio, setHasOpenedStudio] = useState(() => activePageFromHash() === "studio");
   const [markets, setMarkets] = useState<Market[]>([]);
+  const [feedMode, setFeedMode] = useState<"connecting" | "offline" | "simulated" | "binance-us">("connecting");
+  const [supportedIntervals, setSupportedIntervals] = useState<Interval[]>([...intervals]);
   const [symbol, setSymbol] = useState("BTC-USD");
+  const [chartSymbols, setChartSymbols] = useState(["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"]);
+  const [chartLayout, setChartLayout] = useState<1 | 2 | 4>(1);
   const [interval, setInterval] = useState<Interval>("5m");
   const [timezone, setTimezone] = useState(browserTimezone);
   const [search, setSearch] = useState("");
@@ -56,6 +75,8 @@ export default function App() {
   const [showSlowAverage, setShowSlowAverage] = useState(true);
   const [showEma, setShowEma] = useState(false);
   const [showBollinger, setShowBollinger] = useState(false);
+  const [showFibonacci, setShowFibonacci] = useState(false);
+  const [numberStudyValue, setNumberStudyValue] = useState(369);
   const [feedConnected, setFeedConnected] = useState(false);
   const [lastCandle, setLastCandle] = useState<Candle | null>(null);
   const [indicatorSnapshot, setIndicatorSnapshot] = useState<IndicatorSnapshot | null>(null);
@@ -70,19 +91,36 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (page === "studio") setHasOpenedStudio(true);
+  }, [page]);
+
+  useEffect(() => {
     let active = true;
     const refresh = async () => {
       try {
         const response = await fetch("/api/markets");
-        if (!response.ok) return;
-        const body = (await response.json()) as { markets: Market[] };
-        if (active) setMarkets(body.markets);
+        if (!response.ok) {
+          if (active) setFeedMode("offline");
+          return;
+        }
+        const body = (await response.json()) as { markets: Market[]; feed?: string; supportedIntervals?: Interval[] };
+        if (active) {
+          setMarkets(body.markets);
+          setFeedMode(body.feed === "binance-us" ? "binance-us" : "simulated");
+          if (body.supportedIntervals?.length) {
+            setSupportedIntervals(body.supportedIntervals);
+            setInterval((current) => body.supportedIntervals?.includes(current) ? current : body.supportedIntervals?.[0] ?? current);
+          }
+        }
       } catch {
-        if (active) setFeedConnected(false);
+        if (active) {
+          setFeedMode("offline");
+          setFeedConnected(false);
+        }
       }
     };
     void refresh();
-    const timer = window.setInterval(refresh, 2_500);
+    const timer = window.setInterval(refresh, simulatedUpdateIntervalMs);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -128,6 +166,22 @@ export default function App() {
     }
   }
 
+  function choosePrimarySymbol(nextSymbol: string) {
+    setSymbol(nextSymbol);
+    setChartSymbols((current) => [nextSymbol, ...current.slice(1)]);
+    setLastCandle(null);
+    setIndicatorSnapshot(null);
+    setBacktest(null);
+  }
+
+  function chooseChartSymbol(index: number, nextSymbol: string) {
+    if (index === 0) {
+      choosePrimarySymbol(nextSymbol);
+      return;
+    }
+    setChartSymbols((current) => current.map((value, slot) => (slot === index ? nextSymbol : value)));
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -137,7 +191,7 @@ export default function App() {
         </a>
         <div className="topbar-center">
           <span className="workspace-label">RESEARCH WORKSPACE</span>
-          <span className="environment-chip"><span /> SIMULATED FEED</span>
+          <span className="environment-chip"><span />{feedMode === "binance-us" ? "BINANCE.US · LIVE DATA" : feedMode === "simulated" ? "SIMULATED FEED" : feedMode === "offline" ? "FEED OFFLINE" : "CONNECTING"}</span>
         </div>
         <label className="timezone-control">
           <Clock3 size={15} aria-hidden="true" />
@@ -185,7 +239,7 @@ export default function App() {
                 <button
                   className={`market-row${symbol === market.symbol ? " selected" : ""}`}
                   key={market.symbol}
-                  onClick={() => { setSymbol(market.symbol); setLastCandle(null); setIndicatorSnapshot(null); setBacktest(null); }}
+                  onClick={() => choosePrimarySymbol(market.symbol)}
                   type="button"
                   aria-pressed={symbol === market.symbol}
                 >
@@ -197,7 +251,7 @@ export default function App() {
             })}
             {filteredMarkets.length === 0 && <p className="empty-search">No matching markets</p>}
           </div>
-          <div className="watchlist-note"><span className="pulse-dot" /> 24/7 synthetic market session</div>
+          <div className="watchlist-note"><span className="pulse-dot" />{feedMode === "binance-us" ? "24/7 Binance.US spot markets" : "24/7 synthetic market session"}</div>
           <div className="watchlist-bottom">
             <div className="feed-label"><span className={`feed-indicator${feedConnected ? " connected" : ""}`} />Feed connection<strong>{feedConnected ? "Streaming" : "Connecting"}</strong></div>
             <button className="side-link" type="button" onClick={() => window.location.reload()}><Activity size={16} /> Refresh workspace</button>
@@ -205,10 +259,10 @@ export default function App() {
         </aside>
 
         <section
-          aria-hidden={page === "strategy"}
-          className={`chart-workspace${page === "strategy" ? " page-background" : ""}`}
+          aria-hidden={page === "strategy" || page === "paper" || page === "studio"}
+          className={`chart-workspace${page === "strategy" || page === "paper" || page === "studio" ? " page-background" : ""}`}
           aria-label="Market chart and analysis"
-          inert={page === "strategy"}
+          inert={page === "strategy" || page === "paper" || page === "studio"}
         >
           <div className="instrument-header">
             <div className="instrument-title">
@@ -226,7 +280,7 @@ export default function App() {
 
           <div className="chart-toolbar">
             <div className="interval-switch" role="group" aria-label="Chart interval">
-              {intervals.map((value) => (
+              {supportedIntervals.map((value) => (
                 <button key={value} className={interval === value ? "active" : ""} onClick={() => { setInterval(value); setLastCandle(null); setIndicatorSnapshot(null); setBacktest(null); }} type="button" aria-pressed={interval === value}>{value}</button>
               ))}
             </div>
@@ -235,42 +289,74 @@ export default function App() {
             <label className="indicator-toggle"><input type="checkbox" checked={showSlowAverage} onChange={(event) => setShowSlowAverage(event.target.checked)} /><span className="indicator-dot slow" />SMA 21</label>
             <label className="indicator-toggle"><input type="checkbox" checked={showEma} onChange={(event) => setShowEma(event.target.checked)} /><span className="indicator-dot ema" />EMA 20</label>
             <label className="indicator-toggle"><input type="checkbox" checked={showBollinger} onChange={(event) => setShowBollinger(event.target.checked)} /><span className="indicator-dot bands" />BB 20</label>
+            <label className="indicator-toggle"><input type="checkbox" checked={showFibonacci} onChange={(event) => setShowFibonacci(event.target.checked)} /><span className="indicator-dot fib" />Fib · 100</label>
             <div className="chart-toolbar-spacer" />
             <span className="chart-timezone">{timezone}</span>
+            <div className="chart-layout-control" role="group" aria-label="Chart layout">
+              <button type="button" title="Single chart" aria-label="Single chart" aria-pressed={chartLayout === 1} onClick={() => setChartLayout(1)}><Square size={14} /></button>
+              <button type="button" title="Two charts" aria-label="Two charts" aria-pressed={chartLayout === 2} onClick={() => setChartLayout(2)}><Columns2 size={14} /></button>
+              <button type="button" title="Four charts" aria-label="Four charts" aria-pressed={chartLayout === 4} onClick={() => setChartLayout(4)}><LayoutGrid size={14} /></button>
+            </div>
           </div>
 
-          <div className="chart-frame">
-            <div className="chart-legend">
-              <span><i className="legend-candle" /> OHLC · {interval}</span>
-              <span className="chart-source"><span className="pulse-dot" /> SIMULATED · 1s updates</span>
+          {chartLayout === 1 ? (
+            <>
+              <div className="chart-frame">
+                <div className="chart-legend">
+                  <span><i className="legend-candle" /> OHLC · {interval}</span>
+                  <span className="chart-source"><span className="pulse-dot" /> SIMULATED · {simulatedUpdateIntervalMs / 1_000}s updates</span>
+                </div>
+                <MarketChart
+                  symbol={symbol}
+                  interval={interval}
+                  timezone={timezone}
+                  showFastAverage={showFastAverage}
+                  showSlowAverage={showSlowAverage}
+                  showEma={showEma}
+                  showBollinger={showBollinger}
+                  showFibonacci={showFibonacci}
+                  onLastCandle={setLastCandle}
+                  onIndicatorsChange={setIndicatorSnapshot}
+                  onFeedStatus={setFeedConnected}
+                />
+                <div className="ohlc-strip">
+                  <span>O <strong>{formatPrice(lastCandle?.open ?? price, symbol)}</strong></span>
+                  <span>H <strong>{formatPrice(lastCandle?.high ?? price, symbol)}</strong></span>
+                  <span>L <strong>{formatPrice(lastCandle?.low ?? price, symbol)}</strong></span>
+                  <span>C <strong>{formatPrice(lastCandle?.close ?? price, symbol)}</strong></span>
+                  <span>VOL <strong>{formatCompact(lastCandle?.volume ?? 0)}</strong></span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className={`chart-mosaic layout-${chartLayout}`} aria-label="Multi-market chart grid">
+              {chartSymbols.slice(0, chartLayout).map((panelSymbol, index) => (
+                <ChartTile
+                  index={index}
+                  interval={interval}
+                  key={`${index}-${panelSymbol}`}
+                  markets={markets}
+                  onPrimaryFeedStatus={setFeedConnected}
+                  onPrimaryIndicatorsChange={setIndicatorSnapshot}
+                  onPrimaryLastCandle={setLastCandle}
+                  onSymbolChange={(nextSymbol) => chooseChartSymbol(index, nextSymbol)}
+                  showBollinger={showBollinger}
+                  showEma={showEma}
+                  showFastAverage={showFastAverage}
+                  showFibonacci={showFibonacci}
+                  showSlowAverage={showSlowAverage}
+                  symbol={panelSymbol}
+                  timezone={timezone}
+                />
+              ))}
             </div>
-            <MarketChart
-              symbol={symbol}
-              interval={interval}
-              timezone={timezone}
-              showFastAverage={showFastAverage}
-              showSlowAverage={showSlowAverage}
-              showEma={showEma}
-              showBollinger={showBollinger}
-              onLastCandle={setLastCandle}
-              onIndicatorsChange={setIndicatorSnapshot}
-              onFeedStatus={setFeedConnected}
-            />
-            <div className="ohlc-strip">
-              <span>O <strong>{formatPrice(lastCandle?.open ?? price, symbol)}</strong></span>
-              <span>H <strong>{formatPrice(lastCandle?.high ?? price, symbol)}</strong></span>
-              <span>L <strong>{formatPrice(lastCandle?.low ?? price, symbol)}</strong></span>
-              <span>C <strong>{formatPrice(lastCandle?.close ?? price, symbol)}</strong></span>
-              <span>VOL <strong>{formatCompact(lastCandle?.volume ?? 0)}</strong></span>
-            </div>
-          </div>
-          <div className="chart-credit">Interactive chart powered by <a href="https://github.com/tradingview/lightweight-charts" target="_blank" rel="noreferrer">Lightweight Charts</a> · Apache-2.0</div>
+          )}
 
           <section className="analysis-strip" aria-label="Quick market statistics">
             <div><span>SESSION</span><strong>24h rolling</strong></div>
             <div><span>TIME BASIS</span><strong>UTC source · {timezone} display</strong></div>
             <div><span>LAST UPDATE</span><strong>{lastCandle ? formatTime(lastCandle.time, timezone, interval.endsWith("s")) : "Waiting for feed"}</strong></div>
-            <div><span>DATA MODE</span><strong className="simulation-text">Synthetic</strong></div>
+            <div><span>DATA MODE</span><strong className="simulation-text">{feedMode === "binance-us" ? "Binance.US" : feedMode === "offline" ? "Unavailable" : "Synthetic"}</strong></div>
           </section>
           <section className="indicator-readout" aria-label="Statistical indicator values">
             <div><span>RSI · 14</span><strong>{formatIndicator(indicatorSnapshot?.rsi14, 1)}</strong></div>
@@ -281,10 +367,10 @@ export default function App() {
         </section>
 
         <aside
-          aria-hidden={page === "chart" || page === "indicators"}
-          className={`research-pane${page === "chart" || page === "indicators" ? " page-background" : ""}`}
+          aria-hidden={page === "chart" || page === "indicators" || page === "paper" || page === "studio"}
+          className={`research-pane${page === "chart" || page === "indicators" || page === "paper" || page === "studio" ? " page-background" : ""}`}
           aria-label="Strategy backtest"
-          inert={page === "chart" || page === "indicators"}
+          inert={page === "chart" || page === "indicators" || page === "paper" || page === "studio"}
         >
           <div className="research-heading">
             <span className="research-icon"><FlaskConical size={17} /></span>
@@ -331,6 +417,23 @@ export default function App() {
           <div className="research-footnote"><strong>Model assumptions</strong><span>Signal at close, fill at next open. Fees included; slippage and exchange sessions are not modelled.</span></div>
         </aside>
 
+        {page === "paper" && (
+          <section className="paper-page" aria-labelledby="paper-page-title">
+            <header className="page-heading">
+              <span className="eyebrow">NO BROKER CONNECTION</span>
+              <h1 id="paper-page-title">Paper trading</h1>
+              <p>Practice buys and sells using synthetic market quotes and a simulated cash balance.</p>
+            </header>
+            <PaperTradePanel markets={markets} selectedSymbol={symbol} timezone={timezone} />
+          </section>
+        )}
+
+        {hasOpenedStudio && (
+          <Suspense fallback={<div className="studio-loading" role="status">Loading Strategy Studio</div>}>
+            <StrategyStudio active={page === "studio"} symbol={symbol} interval={interval} timezone={timezone} />
+          </Suspense>
+        )}
+
         {page === "indicators" && (
           <section className="indicators-detail" aria-labelledby="indicators-title">
             <header className="page-heading">
@@ -360,6 +463,21 @@ export default function App() {
                 <p>Close position relative to the 20-period, two-standard-deviation bands. Near 0 or 1 marks a band, not a forecast.</p>
               </article>
             </div>
+            <VolumeProfilePanel symbol={symbol} interval={interval} />
+            <section className="number-study" aria-labelledby="number-study-title">
+              <div className="number-study-copy">
+                <span className="eyebrow">MODULAR ARITHMETIC</span>
+                <h2 id="number-study-title">3·6·9 number study</h2>
+                <p>For positive integers, the digital root is the residue modulo 9, with multiples of 9 represented as 9. Try a value to inspect the arithmetic.</p>
+              </div>
+              <label className="number-study-input">Integer input
+                <input type="number" min="0" max="999999999" step="1" value={numberStudyValue} onChange={(event) => setNumberStudyValue(Math.trunc(Number(event.target.value) || 0))} />
+              </label>
+              <div className="number-study-root"><span>DIGITAL ROOT</span><strong>{digitalRoot(numberStudyValue)}</strong></div>
+              <div className="number-study-cycle"><span>DOUBLING · MOD 9</span><strong>{DOUBLING_DIGITAL_ROOT_CYCLE.join(" → ")}</strong></div>
+              <div className="number-study-cycle"><span>MULTIPLES OF 3 · MOD 9</span><strong>{MULTIPLES_OF_THREE_DIGITAL_ROOT_CYCLE.join(" → ")}</strong></div>
+              <p className="number-study-caveat">These are decimal number patterns, not evidence of a universal law or a tested trading signal. The “Tesla 3-6-9 code” attribution is not established by reliable primary sources.</p>
+            </section>
             <div className="indicator-method-note">
               <strong>Calculation scope</strong>
               <span>All indicators use the selected candle series. At 1s, 500 retained bars cover roughly eight minutes; current values use the available window only.</span>
@@ -369,10 +487,108 @@ export default function App() {
       </main>
 
       <footer className="statusbar">
-        <span><span className="statusbar-dot" /> Research mode · simulated quotes only · no orders</span>
+        <span><span className="statusbar-dot" /> Research and paper mode · {feedMode === "binance-us" ? "Binance.US quotes" : "synthetic quotes"} · no broker</span>
         <span><Clock3 size={13} /> {new Intl.DateTimeFormat("en", { timeZone: timezone, hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }).format(new Date())} <span className="status-zone">{timezone}</span></span>
       </footer>
     </div>
+  );
+}
+
+interface ChartTileProps {
+  index: number;
+  interval: Interval;
+  markets: Market[];
+  onPrimaryFeedStatus: (connected: boolean) => void;
+  onPrimaryIndicatorsChange: (snapshot: IndicatorSnapshot) => void;
+  onPrimaryLastCandle: (candle: Candle) => void;
+  onSymbolChange: (symbol: string) => void;
+  showBollinger: boolean;
+  showEma: boolean;
+  showFastAverage: boolean;
+  showFibonacci: boolean;
+  showSlowAverage: boolean;
+  symbol: string;
+  timezone: string;
+}
+
+function ChartTile({
+  index,
+  interval,
+  markets,
+  onPrimaryFeedStatus,
+  onPrimaryIndicatorsChange,
+  onPrimaryLastCandle,
+  onSymbolChange,
+  showBollinger,
+  showEma,
+  showFastAverage,
+  showFibonacci,
+  showSlowAverage,
+  symbol,
+  timezone,
+}: ChartTileProps) {
+  const [lastCandle, setLastCandle] = useState<Candle | null>(null);
+  const [indicators, setIndicators] = useState<IndicatorSnapshot | null>(null);
+  const [connected, setConnected] = useState(false);
+  const handleLastCandle = useCallback((candle: Candle) => {
+    setLastCandle(candle);
+    if (index === 0) onPrimaryLastCandle(candle);
+  }, [index, onPrimaryLastCandle]);
+  const handleIndicatorsChange = useCallback((snapshot: IndicatorSnapshot) => {
+    setIndicators(snapshot);
+    if (index === 0) onPrimaryIndicatorsChange(snapshot);
+  }, [index, onPrimaryIndicatorsChange]);
+  const handleFeedStatus = useCallback((isConnected: boolean) => {
+    setConnected(isConnected);
+    if (index === 0) onPrimaryFeedStatus(isConnected);
+  }, [index, onPrimaryFeedStatus]);
+  const selectedMarket = markets.find((market) => market.symbol === symbol);
+  const price = lastCandle?.close ?? selectedMarket?.price ?? 0;
+  const change = lastCandle ? lastCandle.close - lastCandle.open : selectedMarket?.change ?? 0;
+  const changePercent = lastCandle ? (change / lastCandle.open) * 100 : selectedMarket?.changePercent ?? 0;
+
+  return (
+    <article className="chart-tile" aria-label={`Chart ${index + 1} for ${symbol}`}>
+      <header className="chart-tile-header">
+        <label className="chart-tile-market">
+          <span className="sr-only">Market for chart {index + 1}</span>
+          <select value={symbol} onChange={(event) => onSymbolChange(event.target.value)}>
+            {markets.map((market) => <option value={market.symbol} key={market.symbol}>{market.symbol}</option>)}
+          </select>
+        </label>
+        <div className="chart-tile-quote">
+          <strong>{formatPrice(price, symbol)}</strong>
+          <span className={change >= 0 ? "positive-text" : "negative-text"}>{formatPercent(changePercent)}</span>
+        </div>
+        <span className={`tile-feed-status${connected ? " connected" : ""}`}>{connected ? "STREAMING" : "CONNECTING"}</span>
+      </header>
+      <div className="chart-frame">
+        <div className="chart-legend">
+          <span><i className="legend-candle" /> OHLC · {interval}</span>
+          <span className="chart-source">SIMULATED</span>
+        </div>
+        <MarketChart
+          symbol={symbol}
+          interval={interval}
+          timezone={timezone}
+          showFastAverage={showFastAverage}
+          showSlowAverage={showSlowAverage}
+          showEma={showEma}
+          showBollinger={showBollinger}
+          showFibonacci={showFibonacci}
+          onLastCandle={handleLastCandle}
+          onIndicatorsChange={handleIndicatorsChange}
+          onFeedStatus={handleFeedStatus}
+        />
+      </div>
+      <div className="chart-tile-readout">
+        <span>O <strong>{formatPrice(lastCandle?.open ?? price, symbol)}</strong></span>
+        <span>H <strong>{formatPrice(lastCandle?.high ?? price, symbol)}</strong></span>
+        <span>L <strong>{formatPrice(lastCandle?.low ?? price, symbol)}</strong></span>
+        <span>C <strong>{formatPrice(lastCandle?.close ?? price, symbol)}</strong></span>
+        <span>RSI 14 <strong>{formatIndicator(indicators?.rsi14, 1)}</strong></span>
+      </div>
+    </article>
   );
 }
 

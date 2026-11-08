@@ -6,6 +6,9 @@ export const intervals = [
   "15s",
   "30s",
   "1m",
+  "2m",
+  "3m",
+  "4m",
   "5m",
   "15m",
   "30m",
@@ -14,6 +17,7 @@ export const intervals = [
   "1d",
 ] as const;
 export type Interval = (typeof intervals)[number];
+export const simulatedUpdateIntervalMs = 5_000;
 
 export interface Candle {
   time: number;
@@ -24,10 +28,26 @@ export interface Candle {
   volume: number;
 }
 
+export const candleSchema = z
+  .object({
+    time: z.number().int().nonnegative(),
+    open: z.number().finite().positive(),
+    high: z.number().finite().positive(),
+    low: z.number().finite().positive(),
+    close: z.number().finite().positive(),
+    volume: z.number().finite().nonnegative(),
+  })
+  .refine((candle) => candle.high >= Math.max(candle.open, candle.close) && candle.low <= Math.min(candle.open, candle.close), {
+    message: "Candle high and low must contain its open and close",
+  });
+
+export const candleBatchSchema = z.object({ candles: z.array(candleSchema) });
+
 export interface Market {
   symbol: string;
   name: string;
   venue: string;
+  quoteAsset?: string;
   price: number;
   change: number;
   changePercent: number;
@@ -71,6 +91,50 @@ export interface BacktestResult {
   winRatePercent: number;
   feeBps: number;
   trades: BacktestTrade[];
+}
+
+export const paperOrderRequestSchema = z.object({
+  symbol: z.string().min(1).max(20),
+  side: z.enum(["buy", "sell"]),
+  quantity: z.number().finite().positive().max(1_000_000).refine(
+    (value) => Number.isSafeInteger(value * 100_000_000),
+    "Quantity supports at most 8 decimal places",
+  ),
+});
+
+export type PaperOrderRequest = z.infer<typeof paperOrderRequestSchema>;
+
+export interface PaperOrder {
+  id: string;
+  symbol: string;
+  side: PaperOrderRequest["side"];
+  quantity: number;
+  price: number;
+  notional: number;
+  fee: number;
+  cashImpact: number;
+  time: number;
+}
+
+export interface PaperPosition {
+  symbol: string;
+  quantity: number;
+  averageEntryPrice: number;
+  markPrice: number;
+  marketValue: number;
+  unrealizedPnl: number;
+}
+
+export interface PaperAccountSnapshot {
+  startingCash: number;
+  cash: number;
+  equity: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  totalFees: number;
+  positions: PaperPosition[];
+  recentOrders: PaperOrder[];
 }
 
 export function isSupportedTimeZone(timezone: string): boolean {

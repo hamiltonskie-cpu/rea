@@ -14,6 +14,9 @@ const intervalSeconds: Record<Interval, number> = {
   "15s": 15,
   "30s": 30,
   "1m": 60,
+  "2m": 120,
+  "3m": 180,
+  "4m": 240,
   "5m": 300,
   "15m": 900,
   "30m": 1_800,
@@ -35,6 +38,7 @@ export function getMarkets(): Market[] {
       symbol: definition.symbol,
       name: definition.name,
       venue: definition.venue,
+      quoteAsset: "USD",
       price: latest.close,
       change,
       changePercent: (change / previous.close) * 100,
@@ -65,14 +69,17 @@ export function advanceCandle(symbol: string, interval: Interval): Candle {
   const latest = candles[candles.length - 1];
 
   if (bucket > latest.time) {
-    const stored = cache.get(`${symbol}:${interval}`);
-    const firstBucket = Math.max(latest.time + duration, bucket - 499 * duration);
+    const elapsedBars = Math.floor((bucket - latest.time) / duration);
+    const barsToBuild = Math.min(elapsedBars, 500);
     let previous = latest;
-    for (let time = firstBucket; time <= bucket; time += duration) {
-      previous = makeNextCandle(symbol, previous, time, definition.volatility);
-      stored?.push(previous);
+    const series = cache.get(`${symbol}:${interval}`);
+    for (let index = 0; index < barsToBuild; index += 1) {
+      const time = bucket - (barsToBuild - index - 1) * duration;
+      const next = makeNextCandle(symbol, previous, time, definition.volatility);
+      series?.push(next);
+      if ((series?.length ?? 0) > 500) series?.shift();
+      previous = next;
     }
-    if (stored && stored.length > 500) stored.splice(0, stored.length - 500);
     return previous;
   }
 

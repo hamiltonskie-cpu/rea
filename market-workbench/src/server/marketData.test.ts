@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getCandles } from "./marketData.js";
-import { intervals } from "../shared/market.js";
+import { candleSchema, intervals, simulatedUpdateIntervalMs } from "../shared/market.js";
 
 test("advertises intraday intervals down to one second", () => {
   assert.deepEqual(intervals, [
@@ -10,6 +10,9 @@ test("advertises intraday intervals down to one second", () => {
     "15s",
     "30s",
     "1m",
+    "2m",
+    "3m",
+    "4m",
     "5m",
     "15m",
     "30m",
@@ -29,10 +32,24 @@ test("generates one-second candles at one-second UTC boundaries", () => {
   assert.ok(candles.every((candle) => Number.isInteger(candle.time)));
 });
 
-test("uses each selected interval's duration", () => {
-  const candles = getCandles("ETH-USD", "15s", 4);
+test("generates each supported interval at its correct UTC duration", () => {
+  const cases = [
+    ["15s", 15],
+    ["2m", 120],
+    ["3m", 180],
+    ["4m", 240],
+  ] as const;
 
-  for (let index = 1; index < candles.length; index += 1) {
-    assert.equal(candles[index].time - candles[index - 1].time, 15);
+  for (const [interval, duration] of cases) {
+    const candles = getCandles("ETH-USD", interval, 4);
+    for (let index = 1; index < candles.length; index += 1) {
+      assert.equal(candles[index].time - candles[index - 1].time, duration);
+    }
   }
+});
+
+test("uses a shared five-second update cadence and rejects malformed candles", () => {
+  assert.equal(simulatedUpdateIntervalMs, 5_000);
+  assert.equal(candleSchema.safeParse({ time: 1, open: 10, high: 12, low: 9, close: 11, volume: 5 }).success, true);
+  assert.equal(candleSchema.safeParse({ time: 1, open: 10, high: 10, low: 11, close: 11, volume: 5 }).success, false);
 });

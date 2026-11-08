@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: workspace-markets
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: market-workbench
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: MARKET_DATA_PROVIDER
+        value: binance-us
+      - key: PAPER_SESSION_SECRET
+        generateValue: true

@@ -71,15 +71,15 @@ export function bollingerBands(candles: Candle[], period = 20, deviations = 2): 
 
 export function calculateIndicatorSnapshot(candles: Candle[]): IndicatorSnapshot {
   return {
-    rsi14: calculateRsi(candles, 14),
-    atr14: calculateAtr(candles, 14),
+    rsi14: relativeStrengthIndexSeries(candles, 14).at(-1)?.value ?? null,
+    atr14: averageTrueRangeSeries(candles, 14).at(-1)?.value ?? null,
     realizedVolatility20: calculateRealizedVolatility(candles, 20),
-    bollingerPercentB: calculateBollingerPercentB(candles, 20, 2),
+    bollingerPercentB: bollingerPercentBSeries(candles, 20).at(-1)?.value ?? null,
   };
 }
 
-function calculateRsi(candles: Candle[], period: number): number | null {
-  if (candles.length <= period) return null;
+export function relativeStrengthIndexSeries(candles: Candle[], period: number): IndicatorPoint[] {
+  if (candles.length <= period) return [];
   let gains = 0;
   let losses = 0;
   for (let index = 1; index <= period; index += 1) {
@@ -89,27 +89,30 @@ function calculateRsi(candles: Candle[], period: number): number | null {
   }
   let averageGain = gains / period;
   let averageLoss = losses / period;
+  const points = [{ time: candles[period].time, value: rsiValue(averageGain, averageLoss) }];
   for (let index = period + 1; index < candles.length; index += 1) {
     const change = candles[index].close - candles[index - 1].close;
     averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
     averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+    points.push({ time: candles[index].time, value: rsiValue(averageGain, averageLoss) });
   }
-  if (averageLoss === 0) return averageGain === 0 ? 50 : 100;
-  return 100 - 100 / (1 + averageGain / averageLoss);
+  return points;
 }
 
-function calculateAtr(candles: Candle[], period: number): number | null {
-  if (candles.length <= period) return null;
+export function averageTrueRangeSeries(candles: Candle[], period: number): IndicatorPoint[] {
+  if (candles.length <= period) return [];
   let total = 0;
   for (let index = 1; index <= period; index += 1) {
     total += trueRange(candles[index], candles[index - 1].close);
   }
   let average = total / period;
+  const points = [{ time: candles[period].time, value: average }];
   for (let index = period + 1; index < candles.length; index += 1) {
     average =
       (average * (period - 1) + trueRange(candles[index], candles[index - 1].close)) / period;
+    points.push({ time: candles[index].time, value: average });
   }
-  return average;
+  return points;
 }
 
 function trueRange(candle: Candle, previousClose: number): number {
@@ -133,13 +136,21 @@ function calculateRealizedVolatility(candles: Candle[], returnCount: number): nu
   return Math.sqrt(variance) * 100;
 }
 
-function calculateBollingerPercentB(
+export function bollingerPercentBSeries(
   candles: Candle[],
   period: number,
-  deviations: number,
-): number | null {
-  const latest = bollingerBands(candles, period, deviations).at(-1);
-  if (!latest) return null;
-  const width = latest.upper - latest.lower;
-  return width === 0 ? 0.5 : (candles[candles.length - 1].close - latest.lower) / width;
+  deviations = 2,
+): IndicatorPoint[] {
+  return bollingerBands(candles, period, deviations).map((band, index) => {
+    const width = band.upper - band.lower;
+    return {
+      time: band.time,
+      value: width === 0 ? 0.5 : (candles[period - 1 + index].close - band.lower) / width,
+    };
+  });
+}
+
+function rsiValue(averageGain: number, averageLoss: number): number {
+  if (averageLoss === 0) return averageGain === 0 ? 50 : 100;
+  return 100 - 100 / (1 + averageGain / averageLoss);
 }
